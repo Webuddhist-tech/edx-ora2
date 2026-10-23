@@ -317,7 +317,19 @@ class TestOpenAssessment(XBlockHandlerTestCase):
         self.assertEqual(len(scripts), 1)
 
         items = json.loads(scripts[0].text)
-        self.assertEqual(items, defined_ora_items)
+        expected_ora_items = [
+            {
+                **item,
+                'section_id': '',
+                'section_name': 'Other',
+                'section_index': 9999,
+                'subsection_id': '',
+                'subsection_name': 'Other',
+                'subsection_index': 9999,
+            }
+            for item in defined_ora_items
+        ]
+        self.assertEqual(items, expected_ora_items)
 
     @scenario('data/basic_scenario.xml')
     @override_settings(

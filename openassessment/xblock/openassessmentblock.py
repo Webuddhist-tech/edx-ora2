@@ -27,7 +27,10 @@ from openassessment.staffgrader.staff_grader_mixin import StaffGraderMixin
 from openassessment.workflow.errors import AssessmentWorkflowError
 from openassessment.xblock.apis.grades_api import GradesAPI
 from openassessment.xblock.apis.submissions.submissions_api import SubmissionAPI
-from openassessment.xblock.course_items_listing_mixin import CourseItemsListingMixin
+from openassessment.xblock.course_items_listing_mixin import (
+    CourseItemsListingMixin,
+    enrich_ora_items_with_section,
+)
 from openassessment.xblock.utils.data_conversion import (
     create_prompts_list,
     create_rubric_dict,
@@ -696,7 +699,13 @@ class OpenAssessmentBlock(
                       "staff_assessment": false,
                       "parent_id": "vertical_block_id",
                       "url_base": "/student_view",
-                      "id": "openassessment_block_id"
+                      "id": "openassessment_block_id",
+                      "section_id": "chapter_block_id",
+                      "section_name": "Chapter name",
+                      "section_index": 0,
+                      "subsection_id": "sequential_block_id",
+                      "subsection_name": "Subsection name",
+                      "subsection_index": 0
                      }, ...]
                 "ora_item_view_enabled" - enabled LMS API endpoint to serve XBlock view or not
 
@@ -704,6 +713,7 @@ class OpenAssessmentBlock(
             (Fragment): The HTML Fragment for this XBlock.
         """
         ora_items = context.get('ora_items', []) if context else []
+        ora_items = enrich_ora_items_with_section(str(self.course_id), ora_items)
         ora_item_view_enabled = context.get('ora_item_view_enabled', False) if context else False
         context_dict = {
             "ora_items": json.dumps(ora_items),
