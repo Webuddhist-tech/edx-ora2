@@ -1,3 +1,155 @@
+const LISTING_STORAGE_VERSION = 'v1';
+
+function listingStorageKey(courseId, userId) {
+  return `ora-instructor-listing:${LISTING_STORAGE_VERSION}:${userId}:${courseId}`;
+}
+
+function legacySessionStorageKey(courseId) {
+  return `ora-instructor-listing:${LISTING_STORAGE_VERSION}:${courseId}`;
+}
+
+function removeLegacySessionCheckpoint(courseId) {
+  if (!courseId || !window.sessionStorage) {
+    return;
+  }
+  try {
+    window.sessionStorage.removeItem(legacySessionStorageKey(courseId));
+  } catch (e) {
+    // sessionStorage unavailable
+  }
+}
+
+function readListingCheckpoint(courseId, userId) {
+  if (!courseId || !userId || !window.localStorage) {
+    return null;
+  }
+  removeLegacySessionCheckpoint(courseId);
+  try {
+    const raw = window.localStorage.getItem(listingStorageKey(courseId, userId));
+    if (!raw) {
+      return null;
+    }
+    const checkpoint = JSON.parse(raw);
+    if (checkpoint.userId && String(checkpoint.userId) !== String(userId)) {
+      window.localStorage.removeItem(listingStorageKey(courseId, userId));
+      return null;
+    }
+    return checkpoint;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeListingCheckpoint(courseId, userId, checkpoint) {
+  if (!courseId || !userId || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(
+      listingStorageKey(courseId, userId),
+      JSON.stringify({ ...checkpoint, userId: String(userId) }),
+    );
+  } catch (e) {
+    // localStorage unavailable
+  }
+}
+
+function clearListingScrollTarget(courseId, userId) {
+  const checkpoint = readListingCheckpoint(courseId, userId);
+  if (!checkpoint || !checkpoint.scrollOraId) {
+    return;
+  }
+  const { scrollOraId, ...rest } = checkpoint;
+  writeListingCheckpoint(courseId, userId, rest);
+}
+
+function applyCheckpointToOutline(view, sections, checkpoint) {
+  if (!checkpoint) {
+    return;
+  }
+  const wantSection = checkpoint.section_id || '';
+  const wantSubsection = checkpoint.subsection_id || '';
+  sections.forEach((sectionGroup, sectionIndex) => {
+    const sectionKey = sectionGroup.section_id || `ungrouped-${sectionIndex}`;
+    const sectionMatch = wantSection === (sectionGroup.section_id || '');
+    if (!sectionMatch) {
+      return;
+    }
+    view.setOutlineOpen(sectionKey, true);
+    sectionGroup.subsections.forEach((subsectionGroup, subIndex) => {
+      const subKey = subsectionGroup.subsection_id || `ungrouped-sub-${subIndex}`;
+      const subMatch = wantSubsection === (subsectionGroup.subsection_id || '');
+      if (subMatch) {
+        view.setOutlineOpen(subKey, true);
+      }
+    });
+  });
+}
+
+function groupOraItemsBySectionAndSubsection(items) {
+  const sections = {};
+  items.forEach((item) => {
+    const sectionKey = item.section_id || '__ungrouped__';
+    if (!sections[sectionKey]) {
+      sections[sectionKey] = {
+        section_id: item.section_id || '',
+        section_name: item.section_name || gettext('Other'),
+        section_index: item.section_index != null ? item.section_index : 9999,
+        subsections: {},
+      };
+    }
+    const subKey = item.subsection_id || '__ungrouped_sub__';
+    if (!sections[sectionKey].subsections[subKey]) {
+      sections[sectionKey].subsections[subKey] = {
+        subsection_id: item.subsection_id || '',
+        subsection_name: item.subsection_name || gettext('Other'),
+        subsection_index: item.subsection_index != null ? item.subsection_index : 9999,
+        items: [],
+      };
+    }
+    sections[sectionKey].subsections[subKey].items.push(item);
+  });
+  return Object.values(sections)
+    .sort((a, b) => a.section_index - b.section_index)
+    .map((section) => ({
+      ...section,
+      subsections: Object.values(section.subsections).sort(
+        (a, b) => a.subsection_index - b.subsection_index,
+      ),
+    }));
+}
+
+function setCollapsibleExpanded($group, expanded, animate, toggleClass, bodyClass) {
+  const $header = $group.find(toggleClass);
+  const $body = $group.find(bodyClass);
+  $header.attr('aria-expanded', expanded ? 'true' : 'false');
+  if (animate) {
+    if (expanded) {
+      $body.slideDown(150);
+    } else {
+      $body.slideUp(150);
+    }
+  } else if (expanded) {
+    $body.show();
+  } else {
+    $body.hide();
+  }
+}
+
+function appendCollapsibleToggle($group, label, count, toggleClass, chevronClass, expanded) {
+  const $header = $('<button>', {
+    type: 'button',
+    class: toggleClass,
+    'aria-expanded': expanded ? 'true' : 'false',
+  });
+  $header.append(
+    $('<span>', { class: chevronClass, 'aria-hidden': 'true' }),
+    document.createTextNode(` ${label} (${count})`),
+  );
+  $group.append($header);
+  return $header;
+}
+
 export class CourseItemsListingView {
   constructor(runtime, element, data) {
     const self = this;
@@ -18,6 +170,16 @@ export class CourseItemsListingView {
     }
 
     const context = this.data.CONTEXT || {};
+    this.courseId = context.COURSE_ID || '';
+    this.userId = context.USER_ID != null ? String(context.USER_ID) : '';
+    this._pendingScrollOraId = null;
+    const sessionCheckpoint = readListingCheckpoint(this.courseId, this.userId);
+    this._applySessionOutlineOnNextGrid = Boolean(
+      sessionCheckpoint && (sessionCheckpoint.section_id !== undefined),
+    );
+    if (sessionCheckpoint && sessionCheckpoint.scrollOraId) {
+      this._pendingScrollOraId = sessionCheckpoint.scrollOraId;
+    }
 
     const AssessmentCell = Backgrid.UriCell.extend({
       type: null,
@@ -71,6 +233,9 @@ export class CourseItemsListingView {
         // Remove this in AU-617
         const teamAssignment = this.model.get('team_assignment');
         if (hasAssessmentType && !teamAssignment) {
+          link.on('click', () => {
+            self.saveListingCheckpoint(this.model);
+          });
           this.$el.append(link);
         }
         return this;
@@ -279,19 +444,226 @@ export class CourseItemsListingView {
     }));
   }
 
+  isOutlineOpen(key) {
+    return Boolean(this._openOutlineIds && this._openOutlineIds.has(key));
+  }
+
+  setOutlineOpen(key, expanded) {
+    if (!this._openOutlineIds) {
+      this._openOutlineIds = new Set();
+    }
+    if (expanded) {
+      this._openOutlineIds.add(key);
+    } else {
+      this._openOutlineIds.delete(key);
+    }
+  }
+
+  saveListingCheckpoint(model) {
+    if (!this.courseId || !model) {
+      return;
+    }
+    writeListingCheckpoint(this.courseId, this.userId, {
+      section_id: model.get('section_id') || '',
+      subsection_id: model.get('subsection_id') || '',
+      scrollOraId: model.get('id') || '',
+    });
+  }
+
+  applySessionOutlineRestore(sections) {
+    if (!this._applySessionOutlineOnNextGrid) {
+      return;
+    }
+    this._applySessionOutlineOnNextGrid = false;
+    this._openOutlineIds = new Set();
+    const checkpoint = readListingCheckpoint(this.courseId, this.userId);
+    applyCheckpointToOutline(this, sections, checkpoint);
+  }
+
+  focusListingRow(oraId) {
+    if (!oraId) {
+      return;
+    }
+    const { $section } = this;
+    const $row = $section.find('tr[data-ora-id]').filter(
+      (_, el) => $(el).attr('data-ora-id') === oraId,
+    );
+    if (!$row.length) {
+      return;
+    }
+    $row.addClass('ora-listing-row--focus');
+    const el = $row.get(0);
+    if (el && el.scrollIntoView) {
+      el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    }
+    clearListingScrollTarget(this.courseId, this.userId);
+    this._pendingScrollOraId = null;
+  }
+
   showOpenResponsesGrid(data) {
     const { $section } = this;
+    const $container = $section.find('.open-response-assessment-main-table');
+
     $section.find('.open-response-assessment-content').show();
-    const collection = new Backbone.Collection(data);
+    $container.empty();
 
-    $section.find('.open-response-assessment-main-table').empty();
+    const sections = groupOraItemsBySectionAndSubsection(data);
+    this.applySessionOutlineRestore(sections);
+    const $sectionsRoot = $('<div>', { class: 'ora-listing-sections' });
 
-    const grid = new Backgrid.Grid({
-      columns: this._columns,
-      collection,
+    if (sections.length > 0) {
+      const $controls = $('<div>', { class: 'ora-listing-section-controls' });
+      const $expandAll = $('<input>', {
+        type: 'button',
+        class: 'enrollment-button',
+        value: gettext('Expand all'),
+      });
+      const $collapseAll = $('<input>', {
+        type: 'button',
+        class: 'enrollment-button',
+        value: gettext('Collapse all'),
+      });
+      $expandAll.on('click', () => {
+        $sectionsRoot.find('.ora-listing-section').each((_, el) => {
+          const $el = $(el);
+          this.setOutlineOpen($el.attr('data-section-id'), true);
+          setCollapsibleExpanded(
+            $el, true, false, '.ora-listing-section__toggle', '.ora-listing-section__body',
+          );
+        });
+        $sectionsRoot.find('.ora-listing-subsection').each((_, el) => {
+          const $el = $(el);
+          this.setOutlineOpen($el.attr('data-subsection-id'), true);
+          setCollapsibleExpanded(
+            $el, true, false, '.ora-listing-subsection__toggle', '.ora-listing-subsection__body',
+          );
+        });
+      });
+      $collapseAll.on('click', () => {
+        $sectionsRoot.find('.ora-listing-subsection').each((_, el) => {
+          const $el = $(el);
+          this.setOutlineOpen($el.attr('data-subsection-id'), false);
+          setCollapsibleExpanded(
+            $el, false, false, '.ora-listing-subsection__toggle', '.ora-listing-subsection__body',
+          );
+        });
+        $sectionsRoot.find('.ora-listing-section').each((_, el) => {
+          const $el = $(el);
+          this.setOutlineOpen($el.attr('data-section-id'), false);
+          setCollapsibleExpanded(
+            $el, false, false, '.ora-listing-section__toggle', '.ora-listing-section__body',
+          );
+        });
+      });
+      $controls.append($expandAll, $collapseAll);
+      $container.append($controls);
+    }
+
+    sections.forEach((sectionGroup, sectionIndex) => {
+      const sectionKey = sectionGroup.section_id || `ungrouped-${sectionIndex}`;
+      const sectionOraCount = sectionGroup.subsections.reduce(
+        (total, sub) => total + sub.items.length,
+        0,
+      );
+      const $section = $('<div>', {
+        class: 'ora-listing-section',
+        'data-section-id': sectionKey,
+      });
+      const sectionOpen = this.isOutlineOpen(sectionKey);
+      const $sectionHeader = appendCollapsibleToggle(
+        $section,
+        sectionGroup.section_name,
+        sectionOraCount,
+        'ora-listing-section__toggle',
+        'ora-listing-section__chevron',
+        sectionOpen,
+      );
+      const $sectionBody = $('<div>', { class: 'ora-listing-section__body' });
+      if (!sectionOpen) {
+        $sectionBody.hide();
+      }
+
+      sectionGroup.subsections.forEach((subsectionGroup, subIndex) => {
+        const subKey = subsectionGroup.subsection_id || `ungrouped-sub-${subIndex}`;
+        const $subsection = $('<div>', {
+          class: 'ora-listing-subsection',
+          'data-subsection-id': subKey,
+        });
+        const subCount = subsectionGroup.items.length;
+        const subOpen = this.isOutlineOpen(subKey);
+        const $subHeader = appendCollapsibleToggle(
+          $subsection,
+          subsectionGroup.subsection_name,
+          subCount,
+          'ora-listing-subsection__toggle',
+          'ora-listing-subsection__chevron',
+          subOpen,
+        );
+
+        const $subBody = $('<div>', { class: 'ora-listing-subsection__body' });
+        if (!subOpen) {
+          $subBody.hide();
+        }
+        const $tableHost = $('<div>', { class: 'ora-listing-section__grid' });
+
+        const collection = new Backbone.Collection(subsectionGroup.items);
+        const grid = new Backgrid.Grid({
+          columns: this._columns,
+          collection,
+          row: Backgrid.Row.extend({
+            render() {
+              Backgrid.Row.prototype.render.apply(this, arguments);
+              const oraId = this.model.get('id');
+              if (oraId) {
+                this.$el.attr('data-ora-id', oraId);
+              }
+              return this;
+            },
+          }),
+        });
+        $tableHost.append(grid.render().el);
+        $subBody.append($tableHost);
+
+        $subHeader.on('click', () => {
+          const expanded = $subHeader.attr('aria-expanded') !== 'true';
+          this.setOutlineOpen(subKey, expanded);
+          setCollapsibleExpanded(
+            $subsection,
+            expanded,
+            true,
+            '.ora-listing-subsection__toggle',
+            '.ora-listing-subsection__body',
+          );
+        });
+
+        $subsection.append($subBody);
+        $sectionBody.append($subsection);
+      });
+
+      $sectionHeader.on('click', () => {
+        const expanded = $sectionHeader.attr('aria-expanded') !== 'true';
+        this.setOutlineOpen(sectionKey, expanded);
+        setCollapsibleExpanded(
+          $section,
+          expanded,
+          true,
+          '.ora-listing-section__toggle',
+          '.ora-listing-section__body',
+        );
+      });
+
+      $section.append($sectionBody);
+      $sectionsRoot.append($section);
     });
 
-    $section.find('.open-response-assessment-main-table').append(grid.render().el);
+    $container.append($sectionsRoot);
+
+    if (this._pendingScrollOraId) {
+      const oraId = this._pendingScrollOraId;
+      window.setTimeout(() => {
+        this.focusListingRow(oraId);
+      }, 0);
+    }
   }
 
   displayOraBlock(url) {

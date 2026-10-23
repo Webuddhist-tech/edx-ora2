@@ -154,7 +154,7 @@ describe("OpenAssessment.CourseItemsListingView", function() {
         });
         expect(summaryRowValuesArr).toEqual(expectedArr);
 
-        var rows = $('.open-response-assessment-main-table tbody tr');
+        var rows = $('.ora-listing-section__grid tbody tr');
         expect(rows.length).toBe(3);
 
         var tds = [];
