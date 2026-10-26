@@ -735,6 +735,11 @@ class OpenAssessmentBlock(
             additional_js=["static/js/lib/backgrid/backgrid%s.js" % min_postfix],
             additional_js_context={
                 "COURSE_ID": str(self.course_id),
+                "USER_ID": (
+                    str(self.scope_ids.user_id)
+                    if self.scope_ids.user_id is not None
+                    else ''
+                ),
                 "ENHANCED_STAFF_GRADER": self.is_enhanced_staff_grader_enabled,
                 "ORA_GRADING_MICROFRONTEND_URL": getattr(settings, 'ORA_GRADING_MICROFRONTEND_URL', '')
             }

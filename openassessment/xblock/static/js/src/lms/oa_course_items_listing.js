@@ -1,42 +1,66 @@
 const LISTING_STORAGE_VERSION = 'v1';
 
-function listingStorageKey(courseId) {
+function listingStorageKey(courseId, userId) {
+  return `ora-instructor-listing:${LISTING_STORAGE_VERSION}:${userId}:${courseId}`;
+}
+
+function legacySessionStorageKey(courseId) {
   return `ora-instructor-listing:${LISTING_STORAGE_VERSION}:${courseId}`;
 }
 
-function readListingCheckpoint(courseId) {
-  if (!courseId || !window.sessionStorage) {
-    return null;
-  }
-  try {
-    const raw = window.sessionStorage.getItem(listingStorageKey(courseId));
-    if (!raw) {
-      return null;
-    }
-    return JSON.parse(raw);
-  } catch (e) {
-    return null;
-  }
-}
-
-function writeListingCheckpoint(courseId, checkpoint) {
+function removeLegacySessionCheckpoint(courseId) {
   if (!courseId || !window.sessionStorage) {
     return;
   }
   try {
-    window.sessionStorage.setItem(listingStorageKey(courseId), JSON.stringify(checkpoint));
+    window.sessionStorage.removeItem(legacySessionStorageKey(courseId));
   } catch (e) {
     // sessionStorage unavailable
   }
 }
 
-function clearListingScrollTarget(courseId) {
-  const checkpoint = readListingCheckpoint(courseId);
+function readListingCheckpoint(courseId, userId) {
+  if (!courseId || !userId || !window.localStorage) {
+    return null;
+  }
+  removeLegacySessionCheckpoint(courseId);
+  try {
+    const raw = window.localStorage.getItem(listingStorageKey(courseId, userId));
+    if (!raw) {
+      return null;
+    }
+    const checkpoint = JSON.parse(raw);
+    if (checkpoint.userId && String(checkpoint.userId) !== String(userId)) {
+      window.localStorage.removeItem(listingStorageKey(courseId, userId));
+      return null;
+    }
+    return checkpoint;
+  } catch (e) {
+    return null;
+  }
+}
+
+function writeListingCheckpoint(courseId, userId, checkpoint) {
+  if (!courseId || !userId || !window.localStorage) {
+    return;
+  }
+  try {
+    window.localStorage.setItem(
+      listingStorageKey(courseId, userId),
+      JSON.stringify({ ...checkpoint, userId: String(userId) }),
+    );
+  } catch (e) {
+    // localStorage unavailable
+  }
+}
+
+function clearListingScrollTarget(courseId, userId) {
+  const checkpoint = readListingCheckpoint(courseId, userId);
   if (!checkpoint || !checkpoint.scrollOraId) {
     return;
   }
   const { scrollOraId, ...rest } = checkpoint;
-  writeListingCheckpoint(courseId, rest);
+  writeListingCheckpoint(courseId, userId, rest);
 }
 
 function applyCheckpointToOutline(view, sections, checkpoint) {
@@ -147,8 +171,9 @@ export class CourseItemsListingView {
 
     const context = this.data.CONTEXT || {};
     this.courseId = context.COURSE_ID || '';
+    this.userId = context.USER_ID != null ? String(context.USER_ID) : '';
     this._pendingScrollOraId = null;
-    const sessionCheckpoint = readListingCheckpoint(this.courseId);
+    const sessionCheckpoint = readListingCheckpoint(this.courseId, this.userId);
     this._applySessionOutlineOnNextGrid = Boolean(
       sessionCheckpoint && (sessionCheckpoint.section_id !== undefined),
     );
@@ -438,7 +463,7 @@ export class CourseItemsListingView {
     if (!this.courseId || !model) {
       return;
     }
-    writeListingCheckpoint(this.courseId, {
+    writeListingCheckpoint(this.courseId, this.userId, {
       section_id: model.get('section_id') || '',
       subsection_id: model.get('subsection_id') || '',
       scrollOraId: model.get('id') || '',
@@ -451,7 +476,7 @@ export class CourseItemsListingView {
     }
     this._applySessionOutlineOnNextGrid = false;
     this._openOutlineIds = new Set();
-    const checkpoint = readListingCheckpoint(this.courseId);
+    const checkpoint = readListingCheckpoint(this.courseId, this.userId);
     applyCheckpointToOutline(this, sections, checkpoint);
   }
 
@@ -471,7 +496,7 @@ export class CourseItemsListingView {
     if (el && el.scrollIntoView) {
       el.scrollIntoView({ block: 'center', behavior: 'smooth' });
     }
-    clearListingScrollTarget(this.courseId);
+    clearListingScrollTarget(this.courseId, this.userId);
     this._pendingScrollOraId = null;
   }
 
