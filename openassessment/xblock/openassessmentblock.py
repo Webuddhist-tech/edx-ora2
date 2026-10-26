@@ -713,7 +713,10 @@ class OpenAssessmentBlock(
             (Fragment): The HTML Fragment for this XBlock.
         """
         ora_items = context.get('ora_items', []) if context else []
-        ora_items = enrich_ora_items_with_section(str(self.course_id), ora_items)
+        try:
+            ora_items = enrich_ora_items_with_section(str(self.course_id), ora_items)
+        except Exception:  # pylint: disable=broad-except
+            logger.exception("Could not group ORA items by section")
         ora_item_view_enabled = context.get('ora_item_view_enabled', False) if context else False
         context_dict = {
             "ora_items": json.dumps(ora_items),
@@ -731,6 +734,7 @@ class OpenAssessmentBlock(
             additional_css=["static/css/lib/backgrid/backgrid%s.css" % min_postfix],
             additional_js=["static/js/lib/backgrid/backgrid%s.js" % min_postfix],
             additional_js_context={
+                "COURSE_ID": str(self.course_id),
                 "ENHANCED_STAFF_GRADER": self.is_enhanced_staff_grader_enabled,
                 "ORA_GRADING_MICROFRONTEND_URL": getattr(settings, 'ORA_GRADING_MICROFRONTEND_URL', '')
             }
