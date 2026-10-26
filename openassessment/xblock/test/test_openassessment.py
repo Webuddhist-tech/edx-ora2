@@ -273,11 +273,13 @@ class TestOpenAssessment(XBlockHandlerTestCase):
         'openassessment.xblock.config_mixin.ConfigMixin.is_enhanced_staff_grader_enabled',
         PropertyMock(return_value=False)
     )
-    def test_ora_blocks_listing_view(self, xblock):
+    @patch('openassessment.xblock.course_items_listing_mixin.modulestore')
+    def test_ora_blocks_listing_view(self, xblock, mock_modulestore):
         """
         Test view for listing all courses OA blocks.
 
         """
+        mock_modulestore.return_value.get_course.return_value = None
         xblock_fragment = self.runtime.render(xblock, "ora_blocks_listing_view")
         body_html = xblock_fragment.body_html()
 
