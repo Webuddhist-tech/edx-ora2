@@ -32,13 +32,18 @@ class TestEnrichOraItemsWithSection(TestCase):
             'block-v1:edX+DemoX+Demo_Course+type@chapter+block@chapter1'
         )
 
-        vertical = MagicMock(parent=sequential_key, category='vertical')
+        vertical = MagicMock(
+            location=vertical_key,
+            parent=sequential_key,
+            category='vertical',
+        )
         sequential = MagicMock(
             location=sequential_key,
             parent=chapter_key,
             category='sequential',
             display_name='Lesson 1',
         )
+        sequential.get_children = MagicMock(return_value=[vertical])
         chapter = MagicMock(location=chapter_key, category='chapter', display_name='Week 1')
         chapter.get_children = MagicMock(return_value=[sequential])
 
@@ -59,6 +64,7 @@ class TestEnrichOraItemsWithSection(TestCase):
             'name': 'ORA 1',
         }]
         enrich_ora_items_with_section(course_key, ora_items)
+        store.get_item.assert_not_called()
 
         self.assertEqual(ora_items[0]['section_id'], str(chapter_key))
         self.assertEqual(ora_items[0]['section_name'], 'Week 1')
@@ -66,6 +72,45 @@ class TestEnrichOraItemsWithSection(TestCase):
         self.assertEqual(ora_items[0]['subsection_id'], str(sequential_key))
         self.assertEqual(ora_items[0]['subsection_name'], 'Lesson 1')
         self.assertEqual(ora_items[0]['subsection_index'], 0)
+
+    @patch('openassessment.xblock.course_items_listing_mixin.modulestore')
+    def test_enrich_climbs_when_unit_missing_from_outline_map(self, mock_modulestore):
+        course_key = 'course-v1:edX+DemoX+Demo_Course'
+        vertical_key = UsageKey.from_string(
+            'block-v1:edX+DemoX+Demo_Course+type@vertical+block@orphan_vertical'
+        )
+        sequential_key = UsageKey.from_string(
+            'block-v1:edX+DemoX+Demo_Course+type@sequential+block@seq1'
+        )
+        chapter_key = UsageKey.from_string(
+            'block-v1:edX+DemoX+Demo_Course+type@chapter+block@chapter1'
+        )
+
+        vertical = MagicMock(parent=sequential_key, category='vertical')
+        sequential = MagicMock(
+            location=sequential_key,
+            parent=chapter_key,
+            category='sequential',
+            display_name='Lesson 1',
+        )
+        sequential.get_children = MagicMock(return_value=[])
+        chapter = MagicMock(location=chapter_key, category='chapter', display_name='Week 1')
+        chapter.get_children = MagicMock(return_value=[sequential])
+
+        store = MagicMock()
+        store.get_course.return_value = MagicMock(get_children=lambda: [chapter])
+        store.get_item.side_effect = lambda key: {
+            vertical_key: vertical,
+            sequential_key: sequential,
+            chapter_key: chapter,
+        }[key]
+        mock_modulestore.return_value = store
+
+        ora_items = [{'id': 'ora1', 'parent_id': str(vertical_key), 'name': 'ORA 1'}]
+        enrich_ora_items_with_section(course_key, ora_items)
+
+        self.assertEqual(ora_items[0]['section_name'], 'Week 1')
+        self.assertTrue(store.get_item.called)
 
 
 class TestCourseItemsListingHandlers(XBlockHandlerTestCase, SubmitAssessmentsMixin):

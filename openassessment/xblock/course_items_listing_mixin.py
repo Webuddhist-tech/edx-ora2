@@ -9,36 +9,57 @@ from django.utils.translation import gettext as _
 from opaque_keys.edx.keys import CourseKey, UsageKey
 from webob import Response
 from xblock.core import XBlock
-from xmodule.modulestore.exceptions import ItemNotFoundError
 
 from openassessment.runtime_imports.functions import modulestore
 from openassessment.xblock.staff_area_mixin import require_course_staff
 
 
-def _outline_order_maps(course_key):
+def _build_outline_maps(course_key):
     """
-    Map chapter and sequential usage keys to outline order and display names.
+    Walk the course outline and map chapters, subsections, and units (verticals).
     """
     store = modulestore()
     chapter_order = {}
     subsection_order = {}
+    unit_outline = {}
     try:
         course = store.get_course(course_key)
         if course:
             for ch_idx, chapter in enumerate(course.get_children()):
                 if chapter.category != 'chapter':
                     continue
-                chapter_order[str(chapter.location)] = (ch_idx, chapter.display_name)
-                for seq_idx, sequential in enumerate(chapter.get_children()):
-                    if sequential.category == 'sequential':
-                        subsection_order[str(sequential.location)] = (
+                chapter_id = str(chapter.location)
+                chapter_order[chapter_id] = (ch_idx, chapter.display_name)
+                for seq_idx, child in enumerate(chapter.get_children()):
+                    if child.category == 'sequential':
+                        seq_id = str(child.location)
+                        subsection_order[seq_id] = (
                             ch_idx,
                             seq_idx,
-                            sequential.display_name,
+                            child.display_name,
                         )
-    except ItemNotFoundError:
+                        for vertical in child.get_children():
+                            if vertical.category == 'vertical':
+                                unit_outline[str(vertical.location)] = {
+                                    'section_id': chapter_id,
+                                    'section_name': str(chapter.display_name),
+                                    'section_index': ch_idx,
+                                    'subsection_id': seq_id,
+                                    'subsection_name': str(child.display_name),
+                                    'subsection_index': seq_idx,
+                                }
+                    elif child.category == 'vertical':
+                        unit_outline[str(child.location)] = {
+                            'section_id': chapter_id,
+                            'section_name': str(chapter.display_name),
+                            'section_index': ch_idx,
+                            'subsection_id': '',
+                            'subsection_name': str(_('Other')),
+                            'subsection_index': 9999,
+                        }
+    except Exception:  # pylint: disable=broad-except
         pass
-    return chapter_order, subsection_order
+    return chapter_order, subsection_order, unit_outline
 
 
 def _empty_outline_fields():
@@ -94,7 +115,7 @@ def _outline_for_unit(store, vertical_usage_key, chapter_order, subsection_order
             'subsection_name': str(subsection_name),
             'subsection_index': subsection_index,
         }
-    except (ItemNotFoundError, AttributeError):
+    except Exception:  # pylint: disable=broad-except
         return _empty_outline_fields()
 
 
@@ -107,7 +128,7 @@ def enrich_ora_items_with_section(course_id, ora_items):
 
     store = modulestore()
     course_key = CourseKey.from_string(course_id)
-    chapter_order, subsection_order = _outline_order_maps(course_key)
+    chapter_order, subsection_order, unit_outline = _build_outline_maps(course_key)
     cache = {}
 
     for item in ora_items:
@@ -116,12 +137,20 @@ def enrich_ora_items_with_section(course_id, ora_items):
             item.update(_empty_outline_fields())
             continue
         if parent_id not in cache:
-            cache[parent_id] = _outline_for_unit(
-                store,
-                UsageKey.from_string(parent_id),
-                chapter_order,
-                subsection_order,
-            )
+            if parent_id in unit_outline:
+                cache[parent_id] = unit_outline[parent_id]
+            else:
+                try:
+                    usage_key = UsageKey.from_string(parent_id)
+                except Exception:  # pylint: disable=broad-except
+                    cache[parent_id] = _empty_outline_fields()
+                else:
+                    cache[parent_id] = _outline_for_unit(
+                        store,
+                        usage_key,
+                        chapter_order,
+                        subsection_order,
+                    )
         item.update(cache[parent_id])
 
     return ora_items
