@@ -144,7 +144,7 @@ function appendCollapsibleToggle($group, label, count, toggleClass, chevronClass
   });
   $header.append(
     $('<span>', { class: chevronClass, 'aria-hidden': 'true' }),
-    document.createTextNode(` ${label} (${count})`),
+    $('<span>', { class: 'ora-listing-toggle__label', text: `${label} (${count})` }),
   );
   $group.append($header);
   return $header;
